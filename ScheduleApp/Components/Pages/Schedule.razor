@@ -1,0 +1,372 @@
+@page "/schedule"
+@using ScheduleApp.Models
+@using ScheduleApp.Services
+@inject ScheduleService ScheduleService
+@inject ILogger<Schedule> Logger
+@rendermode InteractiveServer
+
+<PageTitle>Class Schedule</PageTitle>
+
+<div class="container mt-4">
+    <h1 class="mb-4">Class Schedule</h1>
+
+    @if (!string.IsNullOrEmpty(alertMessage))
+    {
+        <div class="alert @alertClass alert-dismissible fade show" role="alert">
+            @alertMessage
+            <button type="button" class="btn-close" @onclick="ClearAlert"></button>
+        </div>
+    }
+
+    <div class="row">
+        <div class="col-md-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">@(editingItem != null ? "Edit Schedule" : "Add Schedule")</h5>
+                </div>
+                <div class="card-body">
+                    <EditForm Model="@currentItem" OnValidSubmit="@HandleSubmit">
+                        <DataAnnotationsValidator />
+                        
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Day of Week:</label>
+                            <InputSelect @bind-Value="currentItem.DayOfWeek" class="form-select">
+                                <option value="">Select day</option>
+                                <option value="Monday">Monday</option>
+                                <option value="Tuesday">Tuesday</option>
+                                <option value="Wednesday">Wednesday</option>
+                                <option value="Thursday">Thursday</option>
+                                <option value="Friday">Friday</option>
+                                <option value="Saturday">Saturday</option>
+                            </InputSelect>
+                            <ValidationMessage For="@(() => currentItem.DayOfWeek)" class="text-danger" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Period Number:</label>
+                            <InputNumber @bind-Value="currentItem.PeriodNumber" class="form-control" min="1" max="7" />
+                            <ValidationMessage For="@(() => currentItem.PeriodNumber)" class="text-danger" />
+                            <small class="text-muted">From 1 to 7</small>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Subject Name:</label>
+                            <InputText @bind-Value="currentItem.SubjectName" class="form-control" placeholder="e.g. Numerical Methods" />
+                            <ValidationMessage For="@(() => currentItem.SubjectName)" class="text-danger" />
+                        </div>
+
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-primary" disabled="@isSubmitting">
+                                @if (isSubmitting)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-2"></span>
+                                }
+                                @(editingItem != null ? "Save Changes" : "Add")
+                            </button>
+                            
+                            @if (editingItem != null)
+                            {
+                                <button type="button" class="btn btn-secondary" @onclick="CancelEdit">
+                                    Cancel
+                                </button>
+                            }
+                        </div>
+                    </EditForm>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mt-3">
+                <div class="card-header bg-info text-white">
+                    <h6 class="mb-0">Constraint Testing</h6>
+                </div>
+                <div class="card-body">
+                    <button class="btn btn-warning btn-sm w-100 mb-2" @onclick="TestAddDuplicate">
+                        Test: Add Duplicate
+                    </button>
+                    <button class="btn btn-warning btn-sm w-100" @onclick="TestEditToDuplicate">
+                        Test: Edit to Duplicate
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-8">
+            <div class="card shadow-sm">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0">Current Schedule</h5>
+                </div>
+                <div class="card-body">
+                    @if (isLoading)
+                    {
+                        <div class="text-center p-5">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                        </div>
+                    }
+                    else if (scheduleItems == null || !scheduleItems.Any())
+                    {
+                        <div class="alert alert-info">
+                            Schedule is empty. Add your first entry!
+                        </div>
+                    }
+                    else
+                    {
+                        @foreach (var day in GetUniqueDays())
+                        {
+                            <div class="mb-4">
+                                <h5 class="border-bottom pb-2 text-primary">@day</h5>
+                                <table class="table table-hover table-striped">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width: 15%;">Period</th>
+                                            <th style="width: 55%;">Subject</th>
+                                            <th style="width: 30%;" class="text-end">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var item in scheduleItems.Where(s => s.DayOfWeek == day).OrderBy(s => s.PeriodNumber))
+                                        {
+                                            <tr>
+                                                <td class="align-middle">
+                                                    <span class="badge bg-primary">Period @item.PeriodNumber</span>
+                                                </td>
+                                                <td class="align-middle">@item.SubjectName</td>
+                                                <td class="align-middle text-end">
+                                                    <button class="btn btn-sm btn-outline-primary me-1" 
+                                                            @onclick="() => StartEdit(item)"
+                                                            title="Edit">
+                                                        Edit
+                                                    </button>
+                                                    <button class="btn btn-sm btn-outline-danger" 
+                                                            @onclick="() => DeleteItem(item.Id)"
+                                                            title="Delete">
+                                                        Delete
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+
+                        <div class="alert alert-light border">
+                            <small class="text-muted">
+                                <strong>Total entries:</strong> @scheduleItems.Count
+                            </small>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<ScheduleItem> scheduleItems = new();
+    private ScheduleItem currentItem = new();
+    private ScheduleItem? editingItem = null;
+    private bool isLoading = true;
+    private bool isSubmitting = false;
+    private string alertMessage = string.Empty;
+    private string alertClass = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadSchedule();
+    }
+
+    private async Task LoadSchedule()
+    {
+        isLoading = true;
+        try
+        {
+            scheduleItems = await ScheduleService.GetAllScheduleItemsAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading schedule");
+            ShowAlert("Error loading schedule", "alert-danger");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task HandleSubmit()
+    {
+        if (isSubmitting) return;
+
+        isSubmitting = true;
+        try
+        {
+            (bool success, string message) result;
+
+            if (editingItem != null)
+            {
+                currentItem.Id = editingItem.Id;
+                result = await ScheduleService.UpdateScheduleItemAsync(currentItem);
+            }
+            else
+            {
+                result = await ScheduleService.AddScheduleItemAsync(currentItem);
+            }
+
+            if (result.success)
+            {
+                ShowAlert(result.message, "alert-success");
+                await LoadSchedule();
+                ResetForm();
+            }
+            else
+            {
+                ShowAlert(result.message, "alert-danger");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error submitting schedule item");
+            ShowAlert("Error saving data", "alert-danger");
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private void StartEdit(ScheduleItem item)
+    {
+        editingItem = item;
+        currentItem = new ScheduleItem
+        {
+            Id = item.Id,
+            DayOfWeek = item.DayOfWeek,
+            PeriodNumber = item.PeriodNumber,
+            SubjectName = item.SubjectName
+        };
+        ClearAlert();
+    }
+
+    private void CancelEdit()
+    {
+        ResetForm();
+        ClearAlert();
+    }
+
+    private async Task DeleteItem(int id)
+    {
+        if (!await JSRuntime.InvokeAsync<bool>("confirm", "Are you sure you want to delete this entry?"))
+            return;
+
+        var result = await ScheduleService.DeleteScheduleItemAsync(id);
+        
+        if (result.Success)
+        {
+            ShowAlert(result.Message, "alert-success");
+            await LoadSchedule();
+            
+            if (editingItem?.Id == id)
+            {
+                ResetForm();
+            }
+        }
+        else
+        {
+            ShowAlert(result.Message, "alert-danger");
+        }
+    }
+
+    private void ResetForm()
+    {
+        currentItem = new ScheduleItem();
+        editingItem = null;
+    }
+
+    private void ShowAlert(string message, string cssClass)
+    {
+        alertMessage = message;
+        alertClass = cssClass;
+    }
+
+    private void ClearAlert()
+    {
+        alertMessage = string.Empty;
+        alertClass = string.Empty;
+    }
+
+    private List<string> GetUniqueDays()
+    {
+        var daysOrder = new[] { "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday" };
+        return scheduleItems
+            .Select(s => s.DayOfWeek)
+            .Distinct()
+            .OrderBy(d => Array.IndexOf(daysOrder, d))
+            .ToList();
+    }
+
+    private async Task TestAddDuplicate()
+    {
+        var firstItem = scheduleItems.FirstOrDefault();
+        if (firstItem == null)
+        {
+            ShowAlert("Add at least one entry first to test", "alert-warning");
+            return;
+        }
+
+        var duplicate = new ScheduleItem
+        {
+            DayOfWeek = firstItem.DayOfWeek,
+            PeriodNumber = firstItem.PeriodNumber,
+            SubjectName = "TEST DUPLICATE"
+        };
+
+        var result = await ScheduleService.AddScheduleItemAsync(duplicate);
+        
+        if (!result.Success)
+        {
+            ShowAlert($"TEST PASSED: Duplicate prevention works! {result.Message}", "alert-success");
+        }
+        else
+        {
+            ShowAlert($"TEST FAILED: Duplicate was added (this is a bug!)", "alert-danger");
+            await LoadSchedule();
+        }
+    }
+
+    private async Task TestEditToDuplicate()
+    {
+        if (scheduleItems.Count < 2)
+        {
+            ShowAlert("Need at least 2 entries to test", "alert-warning");
+            return;
+        }
+
+        var firstItem = scheduleItems[0];
+        var secondItem = scheduleItems[1];
+
+        var editedItem = new ScheduleItem
+        {
+            Id = secondItem.Id,
+            DayOfWeek = firstItem.DayOfWeek,
+            PeriodNumber = firstItem.PeriodNumber,
+            SubjectName = "TEST EDIT"
+        };
+
+        var result = await ScheduleService.UpdateScheduleItemAsync(editedItem);
+        
+        if (!result.Success)
+        {
+            ShowAlert($"TEST PASSED: Edit to duplicate prevention works! {result.Message}", "alert-success");
+        }
+        else
+        {
+            ShowAlert($"TEST FAILED: Duplicate created via edit (this is a bug!)", "alert-danger");
+            await LoadSchedule();
+        }
+    }
+
+    [Inject]
+    private IJSRuntime JSRuntime { get; set; } = default!;
+}
